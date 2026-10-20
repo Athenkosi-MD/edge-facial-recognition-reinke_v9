@@ -172,12 +172,13 @@ def summary():
         out.update(reasons=[], gates=[], vehicles=[], offline_messages=[])
     # Vehicles active but with no camera matched (no download possible at all)
     try:
+        vf = " AND asset_name = :vehicle" if request.args.get("vehicle") else ""
         out["no_camera_match"] = db.session.execute(text(f"""
             SELECT asset_name, count(*) AS n, max(event_at) AS last_at FROM trigger_events
-            WHERE event_type = 'no_device_match' AND event_at >= :t0 AND event_at < :t1
+            WHERE event_type = 'no_device_match' AND event_at >= :t0 AND event_at < :t1{vf}
               AND (account = :account OR (account IS NULL AND asset_name IN
                    (SELECT DISTINCT vehicle FROM {TRIPS_TABLE})))
-            GROUP BY 1 ORDER BY n DESC LIMIT 20"""), p).mappings().all()
+            GROUP BY 1 ORDER BY n DESC LIMIT 20"""), {**p, "vehicle": request.args.get("vehicle")}).mappings().all()
         out["no_camera_match"] = [{"vehicle": r["asset_name"], "n": r["n"], "last_at": _local(r["last_at"])}
                                   for r in out["no_camera_match"]]
     except Exception:  # noqa: BLE001 - older trigger_events without the account column
