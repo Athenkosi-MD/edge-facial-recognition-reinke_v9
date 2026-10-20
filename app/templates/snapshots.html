@@ -47,8 +47,13 @@
                 <option value="accepted">Accepted</option><option value="quality_gates">Rejected by quality gates</option>
                 <option value="camera_offline">Camera offline</option><option value="download_failed">Download failed</option>
                 <option value="in_progress">Still trying</option><option value="other">Other</option></select></div>
-        <div><button class="btn btn-secondary" id="btnToday">Today</button></div>
+        <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" id="btnApply">Apply filters</button>
+            <button class="btn btn-secondary" id="btnReset">Reset</button>
+            <button class="btn btn-secondary" id="btnToday">Today</button>
+        </div>
     </div>
+    <div id="activeFilters" style="margin-top:12px;font-size:12.5px;color:var(--text-dim);"></div>
 </div></div>
 
 <!-- KPIs -->
@@ -127,10 +132,19 @@ const OUTCOME = {
 const COL = {accepted: 'var(--success)', camera_offline: '#8d6e63', download_failed: 'var(--danger)', rejected: 'var(--warning)', errors: '#90a4ae'};
 const LBL = {accepted: 'Accepted', camera_offline: 'Camera offline', download_failed: 'Download failed', rejected: 'Rejected by quality gates', errors: 'Errors'};
 let page = 1;
+let applied = {};          // the filters currently shown (only change when Apply is pressed)
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const today = () => new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);   // SAST
-function f() {
+function f() { return applied; }
+function readForm() {
     return {from: fFrom.value, to: fTo.value, vehicle: fVehicle.value, action: fAction.value, stage: fStage.value};
+}
+function showActive() {
+    const a = applied, bits = [`<b>${esc(a.from)}</b> to <b>${esc(a.to)}</b>`];
+    if (a.vehicle) bits.push(`vehicle <span class="badge badge-info">${esc(a.vehicle)}</span>`);
+    if (a.action) bits.push(`snapshot <b>${esc(a.action)}</b>`);
+    if (a.stage) bits.push(`result <b>${esc((STAGE[a.stage] || [0, a.stage])[1])}</b>`);
+    activeFilters.innerHTML = 'Showing: ' + bits.join(' · ');
 }
 const qs = p => Object.entries(p).filter(([k, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 const badge = (m, k) => { const b = m[k] || ['badge-info', k]; return `<span class="badge ${b[0]}">${esc(b[1])}</span>`; };
@@ -167,7 +181,7 @@ function loadSummary() {
             : '<tr><td colspan="2" style="color:var(--text-muted);padding:18px;">No camera-offline answers in this range.</td></tr>';
         nomatchBody.innerHTML = d.no_camera_match.length ? d.no_camera_match.map(r => `<tr><td>${esc(r.vehicle)}</td><td>${r.n}</td><td>${esc(r.last_at)}</td></tr>`).join('')
             : '<tr><td colspan="3" style="color:var(--text-muted);padding:12px 18px;">Every active vehicle had a camera.</td></tr>';
-        vehBody.innerHTML = d.vehicles.length ? d.vehicles.map(v => `<tr><td><strong>${esc(v.vehicle)}</strong></td><td>${v.jobs}</td>
+        vehBody.innerHTML = d.vehicles.length ? d.vehicles.map(v => `<tr class="sd-row sd-veh" data-vehicle="${esc(v.vehicle)}" title="Show only this vehicle"><td><strong>${esc(v.vehicle)}</strong></td><td>${v.jobs}</td>
             <td>${v.accepted} (${Math.round(100 * v.accepted / Math.max(v.jobs, 1))}%)</td><td>${v.attempts}</td>
             <td>${v.offline_attempts || '—'}</td><td>${v.download_failed_attempts || '—'}</td><td>${v.rejected_attempts || '—'}</td></tr>`).join('')
             : '<tr><td colspan="7" style="color:var(--text-muted);padding:18px;">No snapshot jobs in this range.</td></tr>';
@@ -209,12 +223,27 @@ jobsBody.addEventListener('click', e => {
     });
 });
 
-function reload() { page = 1; loadSummary(); loadJobs(); }
-['fFrom', 'fTo', 'fVehicle', 'fAction', 'fStage'].forEach(id => document.getElementById(id).addEventListener('change', reload));
-btnToday.onclick = () => { fFrom.value = fTo.value = today(); reload(); };
+function reload() { page = 1; showActive(); loadSummary(); loadJobs(); }
+function apply() {
+    const v = readForm();
+    if (v.from && v.to && v.from > v.to) { alert('The "From" date is after the "To" date.'); return; }
+    applied = v; reload();
+}
+btnApply.onclick = apply;
+['fFrom', 'fTo'].forEach(id => document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') apply(); }));
+btnReset.onclick = () => { fFrom.value = fTo.value = today(); fVehicle.value = fAction.value = fStage.value = ''; apply(); };
+btnToday.onclick = () => { fFrom.value = fTo.value = today(); apply(); };
+// Click a vehicle in the Vehicles table to show only that vehicle
+vehBody.addEventListener('click', e => {
+    const tr = e.target.closest('.sd-veh'); if (!tr) return;
+    const v = tr.dataset.vehicle;
+    if (![...fVehicle.options].some(o => o.value === v)) fVehicle.add(new Option(v, v));
+    fVehicle.value = v; apply(); window.scrollTo({top: 0, behavior: 'smooth'});
+});
 btnPrev.onclick = () => { page = Math.max(1, page - 1); loadJobs(); };
 btnNext.onclick = () => { page += 1; loadJobs(); };
 fFrom.value = fTo.value = today();
+applied = readForm();
 fetch('/api/snapshots/vehicles').then(r => r.json()).then(vs => {
     fVehicle.innerHTML = '<option value="">All vehicles</option>' + vs.map(v => `<option>${esc(v)}</option>`).join('');
 });
