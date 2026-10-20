@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Snapshot Downloads – Edge Telematics{% endblock %}
+{% block page_title %}Snapshot Downloads{% endblock %}
+{% block page_subtitle %}Every snapshot the download script requested: camera offline, download failures, quality-gate rejections and retries{% endblock %}
+
+{% block content %}
+<style>
+    .sd-chip { display:inline-block; font-size:11px; padding:2px 7px; border-radius:10px; margin:1px 3px 1px 0;
+               border:1px solid var(--border-light); color:var(--text-dim); white-space:nowrap; }
+    .sd-chip.ok { color:var(--success); border-color:#c8e6c9; background:#f1f8f1; }
+    .sd-chip.off { color:#6d4c41; border-color:#d7ccc8; background:#f6f1ef; }
+    .sd-chip.dl { color:var(--danger); border-color:#f5c6c6; background:#fdf2f2; }
+    .sd-chip.rej { color:var(--warning); border-color:#ffe0b2; background:#fff8ee; }
+    .sd-bar { height:18px; border-radius:6px; overflow:hidden; display:flex; background:var(--border-light); }
+    .sd-bar > div { height:100%; }
+    .sd-legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:12px; color:var(--text-dim); }
+    .sd-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+    .sd-row { cursor:pointer; }
+    .sd-row:hover td { background:var(--accent-pale); }
+    .sd-detail td { background:#fafbfc; padding:0 !important; }
+    .sd-att { width:100%; font-size:12px; }
+    .sd-att th, .sd-att td { padding:6px 10px !important; border-bottom:1px solid var(--border-light); vertical-align:top; }
+    .sd-thumb { width:120px; border-radius:6px; border:1px solid var(--border); display:block; }
+    .sd-hbar { height:8px; border-radius:4px; background:var(--warning); opacity:.75; }
+    .sd-grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:20px; margin-bottom:20px; }
+</style>
+
+{% if not ready %}
+<div class="card"><div style="padding:24px;color:var(--text-dim);">
+    No download log found yet. The tables <code>snapshot_jobs</code> and <code>snapshot_attempts</code> are created by the
+    download script the first time it connects to this database.
+</div></div>
+{% else %}
+
+<!-- Filters -->
+<div class="card" style="margin-bottom:20px;"><div style="padding:18px 22px;">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+        <div style="min-width:150px;"><label class="form-label">From date</label><input type="date" class="form-control" id="fFrom"></div>
+        <div style="min-width:150px;"><label class="form-label">To date</label><input type="date" class="form-control" id="fTo"></div>
+        <div style="min-width:190px;"><label class="form-label">Vehicle</label>
+            <select class="form-control" id="fVehicle"><option value="">All vehicles</option></select></div>
+        <div style="min-width:150px;"><label class="form-label">Snapshot</label>
+            <select class="form-control" id="fAction"><option value="">All</option><option value="initial">Initial (trip start)</option>
+                <option value="recheck">Recheck (3 min)</option><option value="periodic">Periodic (10 min)</option></select></div>
+        <div style="min-width:190px;"><label class="form-label">Result</label>
+            <select class="form-control" id="fStage"><option value="">All results</option>
+                <option value="accepted">Accepted</option><option value="quality_gates">Rejected by quality gates</option>
+                <option value="camera_offline">Camera offline</option><option value="download_failed">Download failed</option>
+                <option value="in_progress">Still trying</option><option value="other">Other</option></select></div>
+        <div><button class="btn btn-secondary" id="btnToday">Today</button></div>
+    </div>
+</div></div>
+
+<!-- KPIs -->
+<div class="grid grid-4" style="margin-bottom:20px;">
+    <div class="stat-card accent"><div class="stat-label">Snapshot jobs</div><div class="stat-value" id="kJobs">—</div>
+        <div class="stat-meta" id="kJobsMeta">—</div></div>
+    <div class="stat-card green"><div class="stat-label">Accepted</div><div class="stat-value" id="kOk" style="color:var(--success);">—</div>
+        <div class="stat-meta" id="kOkMeta">—</div></div>
+    <div class="stat-card warn"><div class="stat-label">Rejected by quality gates</div><div class="stat-value" id="kRej" style="color:var(--warning);">—</div>
+        <div class="stat-meta" id="kRejMeta">—</div></div>
+    <div class="stat-card blue"><div class="stat-label">Camera offline / download failed</div><div class="stat-value" id="kOff">—</div>
+        <div class="stat-meta" id="kOffMeta">—</div></div>
+</div>
+
+<!-- Where tries end up -->
+<div class="card" style="margin-bottom:20px;"><div style="padding:18px 22px;">
+    <div class="card-title" style="margin-bottom:4px;">Where the tries end up</div>
+    <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;" id="triesLabel">Every snapshot request, including retries</div>
+    <div class="sd-bar" id="triesBar"></div>
+    <div class="sd-legend" id="triesLegend"></div>
+</div></div>
+
+<div class="sd-grid2">
+    <div class="card">
+        <div class="card-header"><div><div class="card-title">Why snapshots were rejected</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Quality-gate reasons, counted per try</div></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Gate</th><th>Reason</th><th style="width:34%">Tries</th></tr></thead>
+            <tbody id="reasonsBody"><tr><td colspan="3" style="color:var(--text-muted);padding:18px;">Loading…</td></tr></tbody></table></div>
+    </div>
+    <div class="card">
+        <div class="card-header"><div><div class="card-title">Camera offline</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">What Surfsight answered, and vehicles with no camera matched</div></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Message from Surfsight</th><th>Tries</th></tr></thead>
+            <tbody id="offlineBody"><tr><td colspan="2" style="color:var(--text-muted);padding:18px;">Loading…</td></tr></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>No camera matched (vehicle name not found in Surfsight)</th><th>Times</th><th>Last</th></tr></thead>
+            <tbody id="nomatchBody"></tbody></table></div>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><div><div class="card-title">Vehicles</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Lowest acceptance first — tries that failed on download vs. on the quality gates</div></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Vehicle</th><th>Jobs</th><th>Accepted</th><th>Tries</th>
+        <th>Camera offline</th><th>Download failed</th><th>Rejected by gates</th></tr></thead>
+        <tbody id="vehBody"><tr><td colspan="7" style="color:var(--text-muted);padding:18px;">Loading…</td></tr></tbody></table></div>
+</div>
+
+<div class="card">
+    <div class="card-header"><div><div class="card-title">Snapshot jobs</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;" id="jobsLabel">Click a job to see every try (retry log)</div></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Requested</th><th>Vehicle</th><th>Snapshot</th><th>Result</th>
+        <th>Tries</th><th>Last reason</th></tr></thead>
+        <tbody id="jobsBody"><tr><td colspan="6" style="color:var(--text-muted);padding:18px;">Loading…</td></tr></tbody></table></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-top:1px solid var(--border-light);">
+        <div style="font-size:12px;color:var(--text-muted);" id="pageLabel">—</div>
+        <div style="display:flex;gap:8px;"><button class="btn btn-secondary btn-sm" id="btnPrev">Previous</button>
+            <button class="btn btn-secondary btn-sm" id="btnNext">Next</button></div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if ready %}
+<script>
+const STAGE = {
+    accepted: ['badge-success', 'Accepted'], quality_gates: ['badge-warning', 'Rejected by quality gates'],
+    camera_offline: ['badge-danger', 'Camera offline'], download_failed: ['badge-danger', 'Download failed'],
+    in_progress: ['badge-info', 'Still trying'], not_tried: ['badge-info', 'Not tried (paused)'], other: ['badge-info', 'Other'],
+};
+const OUTCOME = {
+    accepted: ['badge-success', 'Accepted'], rejected: ['badge-warning', 'Rejected'],
+    device_unavailable: ['badge-danger', 'Camera offline'], request_failed: ['badge-danger', 'Request failed'],
+    download_failed: ['badge-danger', 'Download failed'], gate_error: ['badge-info', 'Gate error'], save_failed: ['badge-info', 'Save failed'],
+};
+const COL = {accepted: 'var(--success)', camera_offline: '#8d6e63', download_failed: 'var(--danger)', rejected: 'var(--warning)', errors: '#90a4ae'};
+const LBL = {accepted: 'Accepted', camera_offline: 'Camera offline', download_failed: 'Download failed', rejected: 'Rejected by quality gates', errors: 'Errors'};
+let page = 1;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const today = () => new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);   // SAST
+function f() {
+    return {from: fFrom.value, to: fTo.value, vehicle: fVehicle.value, action: fAction.value, stage: fStage.value};
+}
+const qs = p => Object.entries(p).filter(([k, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+const badge = (m, k) => { const b = m[k] || ['badge-info', k]; return `<span class="badge ${b[0]}">${esc(b[1])}</span>`; };
+function chips(r) {
+    const c = [];
+    if (r.offline) c.push(`<span class="sd-chip off">${r.offline} offline</span>`);
+    if (r.download_failed) c.push(`<span class="sd-chip dl">${r.download_failed} download failed</span>`);
+    if (r.rejected) c.push(`<span class="sd-chip rej">${r.rejected} rejected</span>`);
+    if (r.stage === 'accepted') c.push(`<span class="sd-chip ok">accepted on try ${r.attempts}</span>`);
+    return c.join('');
+}
+
+function loadSummary() {
+    fetch('/api/snapshots/summary?' + qs(f())).then(r => r.json()).then(d => {
+        const s = d.by_stage || {}, n = d.jobs || 0, pct = x => n ? Math.round(100 * x / n) + '%' : '—';
+        kJobs.textContent = n.toLocaleString();
+        kJobsMeta.textContent = `${(d.attempts || 0).toLocaleString()} tries in total`;
+        kOk.textContent = (s.accepted || 0).toLocaleString();
+        kOkMeta.textContent = `${pct(s.accepted || 0)} · ${d.first_try_accepted || 0} on the first try · avg ${d.avg_attempts_to_accept ?? '—'} tries`;
+        kRej.textContent = (s.quality_gates || 0).toLocaleString();
+        kRejMeta.textContent = `${pct(s.quality_gates || 0)} of jobs · ${(d.attempt_outcomes.rejected || 0).toLocaleString()} rejected tries`;
+        kOff.textContent = ((s.camera_offline || 0) + (s.download_failed || 0)).toLocaleString();
+        kOffMeta.textContent = `${s.camera_offline || 0} offline · ${s.download_failed || 0} download failed`;
+
+        const o = d.attempt_outcomes, tot = Object.values(o).reduce((a, b) => a + b, 0) || 1;
+        triesBar.innerHTML = Object.keys(COL).map(k => o[k] ? `<div title="${LBL[k]}: ${o[k]}" style="width:${100 * o[k] / tot}%;background:${COL[k]}"></div>` : '').join('');
+        triesLegend.innerHTML = Object.keys(COL).map(k => `<span><i style="background:${COL[k]}"></i>${LBL[k]} ${o[k] || 0} (${Math.round(100 * (o[k] || 0) / tot)}%)</span>`).join('');
+
+        const mx = Math.max(1, ...d.reasons.map(r => r.n));
+        reasonsBody.innerHTML = d.reasons.length ? d.reasons.map(r => `<tr><td>${esc(r.failed_gate || '—')}</td><td>${esc(r.reason)}</td>
+            <td><div style="display:flex;align-items:center;gap:8px;"><div class="sd-hbar" style="width:${80 * r.n / mx}%"></div>${r.n}</div></td></tr>`).join('')
+            : '<tr><td colspan="3" style="color:var(--text-muted);padding:18px;">No rejected snapshots in this range.</td></tr>';
+        offlineBody.innerHTML = d.offline_messages.length ? d.offline_messages.map(r => `<tr><td>${esc(r.message)}</td><td>${r.n}</td></tr>`).join('')
+            : '<tr><td colspan="2" style="color:var(--text-muted);padding:18px;">No camera-offline answers in this range.</td></tr>';
+        nomatchBody.innerHTML = d.no_camera_match.length ? d.no_camera_match.map(r => `<tr><td>${esc(r.vehicle)}</td><td>${r.n}</td><td>${esc(r.last_at)}</td></tr>`).join('')
+            : '<tr><td colspan="3" style="color:var(--text-muted);padding:12px 18px;">Every active vehicle had a camera.</td></tr>';
+        vehBody.innerHTML = d.vehicles.length ? d.vehicles.map(v => `<tr><td><strong>${esc(v.vehicle)}</strong></td><td>${v.jobs}</td>
+            <td>${v.accepted} (${Math.round(100 * v.accepted / Math.max(v.jobs, 1))}%)</td><td>${v.attempts}</td>
+            <td>${v.offline_attempts || '—'}</td><td>${v.download_failed_attempts || '—'}</td><td>${v.rejected_attempts || '—'}</td></tr>`).join('')
+            : '<tr><td colspan="7" style="color:var(--text-muted);padding:18px;">No snapshot jobs in this range.</td></tr>';
+    });
+}
+
+function loadJobs() {
+    fetch('/api/snapshots/jobs?' + qs({...f(), page})).then(r => r.json()).then(d => {
+        jobsBody.innerHTML = d.rows.length ? d.rows.map(r => `<tr class="sd-row" data-job="${r.job_id}">
+            <td style="white-space:nowrap;">${esc(r.created_at)}</td><td><strong>${esc(r.vehicle)}</strong></td><td>${esc(r.action)}</td>
+            <td>${badge(STAGE, r.stage)}</td><td><b>${r.attempts}</b><div>${chips(r)}</div></td>
+            <td style="font-size:12px;color:var(--text-dim);max-width:380px;">${esc(r.reason || '')}</td></tr>`).join('')
+            : '<tr><td colspan="6" style="color:var(--text-muted);padding:18px;">No snapshot jobs match these filters.</td></tr>';
+        jobsLabel.textContent = `${d.total.toLocaleString()} job(s) · click a job to see every try (retry log)`;
+        pageLabel.textContent = `Page ${d.page} of ${d.pages}`;
+        btnPrev.disabled = d.page <= 1; btnNext.disabled = d.page >= d.pages;
+    });
+}
+
+jobsBody.addEventListener('click', e => {
+    const tr = e.target.closest('.sd-row'); if (!tr) return;
+    const open = tr.nextElementSibling && tr.nextElementSibling.classList.contains('sd-detail');
+    if (open) { tr.nextElementSibling.remove(); return; }
+    const row = document.createElement('tr'); row.className = 'sd-detail';
+    row.innerHTML = '<td colspan="6"><div style="padding:12px 18px;color:var(--text-muted);">Loading tries…</div></td>';
+    tr.after(row);
+    fetch(`/api/snapshots/jobs/${tr.dataset.job}/attempts`).then(r => r.json()).then(list => {
+        row.firstChild.innerHTML = list.length ? `<table class="sd-att"><thead><tr><th>Try</th><th>Time</th><th>Result</th>
+            <th>Why</th><th>Details</th><th>Image</th></tr></thead><tbody>` + list.map(a => {
+                const why = a.outcome === 'rejected' ? `<b>${esc(a.gate || '')}</b><br>${a.reasons.map(esc).join('<br>')}`
+                    : esc(a.message || (a.reasons || []).join(', '));
+                const det = [a.http ? `HTTP ${a.http}` : '', a.ms != null ? `${a.ms} ms` : '',
+                    ...Object.entries(a.metrics || {}).map(([k, v]) => `${k} ${Array.isArray(v) ? v.join('×') : v}`)].filter(Boolean).join(' · ');
+                const img = a.image ? `<a href="${a.image}" target="_blank"><img class="sd-thumb" src="${a.image}" loading="lazy"></a>` : '';
+                return `<tr><td>${a.no}</td><td style="white-space:nowrap;">${esc(a.at)}</td><td>${badge(OUTCOME, a.outcome)}</td>
+                    <td>${why}</td><td style="color:var(--text-muted);">${esc(det)}</td><td>${img}</td></tr>`;
+            }).join('') + '</tbody></table>'
+            : '<div style="padding:12px 18px;color:var(--text-muted);">No tries logged for this job (it was paused before the first try).</div>';
+    });
+});
+
+function reload() { page = 1; loadSummary(); loadJobs(); }
+['fFrom', 'fTo', 'fVehicle', 'fAction', 'fStage'].forEach(id => document.getElementById(id).addEventListener('change', reload));
+btnToday.onclick = () => { fFrom.value = fTo.value = today(); reload(); };
+btnPrev.onclick = () => { page = Math.max(1, page - 1); loadJobs(); };
+btnNext.onclick = () => { page += 1; loadJobs(); };
+fFrom.value = fTo.value = today();
+fetch('/api/snapshots/vehicles').then(r => r.json()).then(vs => {
+    fVehicle.innerHTML = '<option value="">All vehicles</option>' + vs.map(v => `<option>${esc(v)}</option>`).join('');
+});
+reload();
+setInterval(() => { if (!document.querySelector('.sd-detail')) { loadSummary(); loadJobs(); } }, 60000);
+</script>
+{% endif %}
+{% endblock %}

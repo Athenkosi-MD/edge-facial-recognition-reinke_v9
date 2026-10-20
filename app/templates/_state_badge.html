@@ -1,0 +1,8 @@
+{# Enrollment-state badge. Expects `d` (a Driver) in scope. #}
+{% set _st = d.enrollment_state or 'FULLY_ENROLLED' %}
+{% if _st == 'FULLY_ENROLLED' %}<span class="badge badge-info" title="Enrolled with photos in the web app">FULLY ENROLLED</span>
+{% elif _st == 'AUTO_ENROLLED' %}<span class="badge badge-success" title="Confirmed by OCC from cab snapshots; complete full enrollment when possible">AUTO-ENROLLED</span>
+{% elif _st == 'UNIDENTIFIED' %}<span class="badge badge-warning" title="Created automatically from an unknown face; alerts until OCC reviews it">UNIDENTIFIED</span>
+{% elif _st == 'REJECTED' %}<span class="badge badge-danger" title="Marked unauthorised by OCC">UNAUTHORISED</span>
+{% elif _st == 'MERGED' %}<span class="badge" style="background:#eceff1;color:#546e7a;border:1px solid #cfd8dc;" title="Same person as {{ d.merged_into }}">MERGED → {{ d.merged_into }}</span>
+{% else %}<span class="badge" style="background:#eceff1;color:#546e7a;border:1px solid #cfd8dc;">{{ _st }}</span>{% endif %}

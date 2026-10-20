@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Driver Registry – Edge Telematics{% endblock %}
+{% block page_title %}Driver Registry{% endblock %}
+{% block page_subtitle %}All enrolled drivers — {{ drivers|length }} total{% endblock %}
+
+{% block content %}
+{% set cur_role = session.get('role', '') %}
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:10px;">
+    <div style="display:flex;gap:10px;">
+        <input type="text" class="form-control" id="searchInput" placeholder="Search by name, ID..." style="width:280px;" oninput="filterDrivers()">
+        <select class="form-control" id="statusFilter" style="width:130px;" onchange="filterDrivers()">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <select class="form-control" id="stateFilter" style="width:190px;" onchange="filterDrivers()">
+            <option value="">All enrollment states</option>
+            <option value="FULLY_ENROLLED">Fully enrolled ({{ state_counts.get('FULLY_ENROLLED', 0) }})</option>
+            <option value="AUTO_ENROLLED">Auto-enrolled ({{ state_counts.get('AUTO_ENROLLED', 0) }})</option>
+            <option value="UNIDENTIFIED">Unidentified ({{ state_counts.get('UNIDENTIFIED', 0) }})</option>
+            <option value="REJECTED">Unauthorised ({{ state_counts.get('REJECTED', 0) }})</option>
+            <option value="RETIRED">Merged / expired ({{ state_counts.get('MERGED', 0) + state_counts.get('EXPIRED', 0) }})</option>
+        </select>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+        {# Export button – available to all roles #}
+        <button class="btn btn-secondary" onclick="exportDriverList()" title="Export driver list to CSV (no images)">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export CSV
+        </button>
+        {# Enroll button – admin, support, client can enroll #}
+        {% if cur_role in ('admin', 'support', 'client') %}
+        <a href="/enroll" class="btn btn-primary">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Enroll New Driver
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+{% if drivers %}
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;" id="driversGrid">
+    {% for d in drivers %}
+    <div class="card driver-card" data-name="{{ d.first_name }} {{ d.last_name }}" data-id="{{ d.driver_id }}" data-status="{{ d.status }}" data-state="{{ d.enrollment_state or 'FULLY_ENROLLED' }}">
+        <div style="padding:20px;">
+            <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;">
+                {% if d.photo_url %}
+                <img src="{{ d.photo_url }}" class="avatar avatar-lg" alt="{{ d.first_name }}">
+                {% else %}
+                <div class="avatar avatar-lg avatar-placeholder" style="font-size:22px;">{{ d.first_name[0] }}{{ d.last_name[0] }}</div>
+                {% endif %}
+                <div style="flex:1;min-width:0;">
+                    <div style="font-family:var(--font-head);font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ d.first_name }} {{ d.last_name }}</div>
+                    <div style="font-size:11px;color:var(--accent);margin:3px 0;">{{ d.driver_id }}</div>
+                    <div>
+                        {% if d.status == 'active' %}
+                        <span class="badge badge-success">ACTIVE</span>
+                        {% else %}
+                        <span class="badge badge-danger">INACTIVE</span>
+                        {% endif %}
+                        {% include '_state_badge.html' %}
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-size:11px;color:var(--text-dim);display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                {% if d.email %}
+                <div><div style="color:var(--text-muted);margin-bottom:2px;">EMAIL</div>{{ d.email }}</div>
+                {% endif %}
+                {% if d.phone %}
+                <div><div style="color:var(--text-muted);margin-bottom:2px;">PHONE</div>{{ d.phone }}</div>
+                {% endif %}
+                {% if d.role %}
+                <div><div style="color:var(--text-muted);margin-bottom:2px;">ROLE</div>{{ d.role }}</div>
+                {% endif %}
+                <div><div style="color:var(--text-muted);margin-bottom:2px;">SAMPLES</div>{{ d.photo_count }} photos</div>
+            </div>
+
+            <div class="divider" style="margin:14px 0;"></div>
+
+            {# Date on its own line, buttons underneath and allowed to wrap: on narrow cards
+               (Unidentified drivers have 4 buttons) the row ran past the card edge. #}
+            <div style="display:flex;flex-direction:column;align-items:stretch;gap:10px;">
+                <div style="font-size:10px;color:var(--text-muted);white-space:nowrap;">
+                    {% if d.enrollment_state == 'UNIDENTIFIED' %}First seen {{ d.first_seen_at.strftime('%d %b %Y') if d.first_seen_at }}
+                    {% else %}Enrolled {{ d.enrollment_date.strftime('%d %b %Y') if d.enrollment_date }}{% endif %}
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    {# View – all roles #}
+                    {% if d.enrollment_state == 'UNIDENTIFIED' %}
+                    <a href="/unidentified#{{ d.driver_id }}" class="btn btn-primary btn-sm">Review</a>
+                    {% endif %}
+                    <a href="/drivers/{{ d.driver_id }}" class="btn btn-secondary btn-sm">View</a>
+                    {# Toggle/Delete – admin and support only #}
+                    {% if cur_role in ('admin', 'support') %}
+                    <button class="btn btn-secondary btn-sm" onclick="toggleDriver({{ d.id }}, this)">
+                        {{ 'Deactivate' if d.status == 'active' else 'Activate' }}
+                    </button>
+                    {% endif %}
+                    {% if cur_role == 'admin' %}
+                    <button class="btn btn-danger btn-sm" onclick="deleteDriver({{ d.id }}, this)">Delete</button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body" style="text-align:center;padding:80px 40px;">
+        <div style="font-size:56px;margin-bottom:20px;">👥</div>
+        <div style="font-family:var(--font-head);font-size:22px;font-weight:700;margin-bottom:10px;">No Drivers Enrolled</div>
+        <div style="color:var(--text-dim);margin-bottom:24px;">Start by enrolling your first driver into the system.</div>
+        {% if cur_role in ('admin', 'support', 'client') %}
+        <a href="/enroll" class="btn btn-primary btn-lg">Enroll First Driver</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterDrivers() {
+    const q = document.getElementById('searchInput').value.toLowerCase();
+    const status = document.getElementById('statusFilter').value;
+    const stateSel = document.getElementById('stateFilter').value;
+    document.querySelectorAll('.driver-card').forEach(card => {
+        const name = card.dataset.name.toLowerCase();
+        const id = card.dataset.id.toLowerCase();
+        const s = card.dataset.status;
+        const matchQ = !q || name.includes(q) || id.includes(q);
+        const matchS = !status || s === status;
+        const st = card.dataset.state;
+        const retired = st === 'MERGED' || st === 'EXPIRED';
+        // Merged / expired records are hidden unless asked for explicitly.
+        const matchState = stateSel === 'RETIRED' ? retired : (stateSel ? st === stateSel : !retired);
+        card.style.display = matchQ && matchS && matchState ? '' : 'none';
+    });
+}
+
+(function initStateFilter() {
+    const initial = {{ (initial_state or '')|tojson }};
+    if (initial) document.getElementById('stateFilter').value = initial;
+    filterDrivers();
+})();
+
+function exportDriverList() {
+    window.location.href = '/api/drivers/export-list';
+}
+
+function toggleDriver(id, btn) {
+    fetch(`/api/drivers/${id}/toggle`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast(`Driver ${data.status === 'active' ? 'activated' : 'deactivated'}`, 'success');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast(data.error || 'Error', 'error');
+            }
+        });
+}
+
+function deleteDriver(id, btn) {
+    if (!confirm('Are you sure you want to permanently delete this driver and all their face data?')) return;
+    fetch(`/api/drivers/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Driver deleted', 'success');
+                btn.closest('.driver-card').style.animation = 'fadeOut 0.3s ease forwards';
+                setTimeout(() => btn.closest('.driver-card').remove(), 300);
+            }
+        });
+}
+</script>
+{% endblock %}
